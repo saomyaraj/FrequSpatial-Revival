@@ -1,1 +1,6 @@
 DIV2K/
+results/best_model.pth
+results/checkpoint_epoch_005.pth
+results/checkpoint_epoch_010.pth
+results/checkpoint_epoch_015.pth
+results/latest_model.pth
