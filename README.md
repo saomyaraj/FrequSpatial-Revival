@@ -1,17 +1,22 @@
 # Frequ-Spatial: Hybrid Frequency-Spatial Image Super-Resolution
 
-A deep learning-based image super-resolution model that combines frequency and spatial domain processing for enhanced image restoration. This project implements a hybrid network architecture that leverages both frequency and spatial domain features to achieve superior super-resolution results.
+A U-Net based image super-resolution model that combines frequency and spatial domain processing for enhanced image restoration. This project implements a hybrid network architecture that uses both frequency and spatial domain features to achieve SOTA super-resolution results.
 
 ## Features
 
 - Hybrid architecture combining frequency and spatial domain processing
-- Attention mechanisms for better feature fusion
-- Multi-scale feature extraction
-- Advanced loss functions including perceptual and frequency domain losses
-- Mixed precision training for improved efficiency
-- Comprehensive data augmentation
-- Automatic checkpointing and early stopping
-- Weights & Biases integration for experiment tracking
+- Dual-branch network:
+  - Spatial branch with U-Net for capturing local & global features
+  - Frequency branch using differentiable FFT to process magnitude & phase
+- Spatial and Channel Attention for better feature fusion across domains
+- Adaptive fusion module with residual connections to preserve detail
+- Multi-scale feature extraction for better representation at different resolutions
+- loss functions:
+  - Pixel-wise losses: L1, L2
+  - Perceptual loss using pretrained VGG
+  - Adversarial loss via GAN setup for realism
+- Mixed precision training for improved memory & speed
+- Automatic checkpointing and early stopping to prevent overfitting
 
 ## Requirements
 
@@ -86,7 +91,7 @@ class Config:
 To train the model:
 
 ```bash
-python train.py
+run cells of model.ipynb
 ```
 
 The training process includes:
