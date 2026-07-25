@@ -47,17 +47,19 @@ def save_result_grid(lr: torch.Tensor, # [B, 3, H_lr, W_lr]
 
 
 # training Curves
-def save_training_curves(train_losses: list, val_psnrs: list, loss_components: dict, save_path: str,): # {"l1": [...], "perc": [...], "freq": [...], "adv": [...]}
+def save_training_curves(train_losses: list, val_psnrs: list, save_path: str):
+    """L1 loss + validation PSNR. (Single-loss training → no per-component panel, and nothing to
+    misalign after a resume.)"""
     epochs = list(range(1, len(train_losses) + 1))
 
-    fig = plt.figure(figsize=(16, 10))
-    gs = gridspec.GridSpec(2, 2, figure=fig)
+    fig = plt.figure(figsize=(14, 5))
+    gs = gridspec.GridSpec(1, 2, figure=fig)
 
-    # total loss
+    # training loss
     ax0 = fig.add_subplot(gs[0, 0])
     ax0.plot(epochs, train_losses, color="#e74c3c", linewidth=1.5)
-    ax0.set_title("total generator loss")
-    ax0.set_xlabel("Epoch"); ax0.set_ylabel("Loss")
+    ax0.set_title("training L1 loss")
+    ax0.set_xlabel("Epoch"); ax0.set_ylabel("L1")
     ax0.grid(True, alpha=0.3)
 
     # validation PSNR
@@ -70,19 +72,121 @@ def save_training_curves(train_losses: list, val_psnrs: list, loss_components: d
     ax1.set_xlabel("Epoch"); ax1.set_ylabel("PSNR (dB)")
     ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
 
-    # individual loss components
-    ax2 = fig.add_subplot(gs[1, :])
-    colors = {"l1": "#3498db", "perc": "#9b59b6", "freq": "#e67e22", "adv": "#e74c3c"}
-    for name, vals in loss_components.items():
-        if vals:
-            ax2.plot(epochs[:len(vals)], vals, label=name.upper(), color=colors.get(name, "black"), linewidth=1.2, alpha=0.85)
-    ax2.set_title("loss components")
-    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Loss (unweighted)")
-    ax2.legend(fontsize=8); ax2.grid(True, alpha=0.3)
-
     plt.tight_layout()
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
+# ── SR-MoSO mechanism figures (routing + expert spectra) ───────────────────────
+def _get_spectral_ops(model):
+    """all interleaved MoSpectralOperator stages in the trunk, in depth order (may be empty)."""
+    from models.spectral import MoSpectralOperator
+    return [m for m in model.modules() if isinstance(m, MoSpectralOperator)]
+
+
+def _get_spectral_op(model, stage: int = -1):
+    """one operator stage (default: the deepest). None if the model has no spectral stages."""
+    ops = _get_spectral_ops(model)
+    return ops[stage] if ops else None
+
+
+@torch.no_grad()
+def save_routing_maps(model, lr: torch.Tensor, save_path: str, max_experts: int = 8, stage: int = -1):
+    """Per-pixel routing weights r_k(p) of one SR-MoSO stage for one LR image: LR input + K expert
+    heatmaps + the argmax (dominant-expert) map. The payoff figure — shows experts specialize
+    spatially. Only meaningful in 'moso' mode. lr: [1,3,H,W]."""
+    op = _get_spectral_op(model, stage)
+    if op is None or op.mode != "moso":
+        return None
+    device = next(model.parameters()).device
+    was, model_training = op.capture_routing, model.training
+    op.capture_routing = True
+    model.eval()
+    _ = model(lr[:1].to(device))
+    r = op._last_routing                                           # [1,K,h,w]
+    op.capture_routing = was
+    op._last_routing = None
+    if model_training:
+        model.train()
+    if r is None:
+        return None
+
+    r = r[0].cpu()                                                 # [K,h,w]
+    K = min(r.shape[0], max_experts)
+    lr_np = tensor_to_np(lr[0])
+    argmax = r[:K].argmax(0).numpy()                               # [h,w] dominant expert
+
+    fig, axes = plt.subplots(1, K + 2, figsize=(3 * (K + 2), 3.2))
+    axes[0].imshow(lr_np.clip(0, 1)); axes[0].set_title("LR input", fontsize=9); axes[0].axis("off")
+    for k in range(K):
+        im = axes[k + 1].imshow(r[k].numpy(), cmap="viridis")
+        axes[k + 1].set_title(f"expert {k}", fontsize=9); axes[k + 1].axis("off")
+        plt.colorbar(im, ax=axes[k + 1], fraction=0.046, pad=0.04)
+    im = axes[K + 1].imshow(argmax, cmap="tab10", vmin=0, vmax=max(9, K - 1))
+    axes[K + 1].set_title("dominant expert", fontsize=9); axes[K + 1].axis("off")
+    plt.colorbar(im, ax=axes[K + 1], fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
+def save_erf(model, img: torch.Tensor, save_path: str):
+    """Effective Receptive Field: |∂ SR(center pixel) / ∂ input| over the input image. A global
+    operator (SR-MoSO) spreads across the whole input; windowed-local attention / local conv stays
+    compact. Compare `proposed` vs `no_freq` to show the frequency branch makes the ERF global.
+    (Not @no_grad — it needs a backward pass.)"""
+    was_training = model.training
+    model.eval()
+    x = img[:1].clone().detach().requires_grad_(True)
+    out = model(x)                                                 # [1,3,sH,sW]
+    sh, sw = out.shape[-2:]
+    resp = out[0, :, sh // 2, sw // 2].mean()                      # center-pixel response
+    model.zero_grad(set_to_none=True)
+    resp.backward()
+    grad = x.grad[0].abs().mean(0).cpu().numpy()                   # [H,W]
+    grad = np.log1p(grad / (grad.max() + 1e-12) * 1e3)            # log-scale for visibility
+
+    fig, ax = plt.subplots(figsize=(4.2, 4))
+    im = ax.imshow(grad, cmap="viridis")
+    ax.set_title("Effective Receptive Field", fontsize=9); ax.axis("off")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    if was_training:
+        model.train()
+    return save_path
+
+
+@torch.no_grad()
+def save_expert_spectra(model, save_path: str, H: int = 64, W: int = 64, max_experts: int = 8,
+                        stage: int = -1):
+    """Each expert's learned magnitude response |D_k| over normalized frequency (DC centered
+    vertically; width is the rfft half-spectrum 0→Nyquist). Shows experts cover complementary /
+    anisotropic frequency bands — distinguishes SR-MoSO from a single static filter."""
+    op = _get_spectral_op(model, stage)
+    if op is None:
+        return None
+    K = min(op.K, max_experts)
+    fig, axes = plt.subplots(1, K, figsize=(3 * K, 3.2))
+    if K == 1:
+        axes = [axes]
+    for k in range(K):
+        resp = torch.fft.fftshift(op.expert_response(k, H, W), dim=0).cpu().numpy()  # [H,Wr], DC-centered
+        im = axes[k].imshow(resp, cmap="inferno", aspect="auto")
+        axes[k].set_title(f"expert {k}  |D|", fontsize=9)
+        axes[k].set_xlabel("f_w →"); axes[k].set_yticks([])
+        plt.colorbar(im, ax=axes[k], fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     return save_path
 

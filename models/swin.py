@@ -1,7 +1,6 @@
 """
-FrequSpatial V2 — Swin Transformer Blocks
-Proper SwinIR-style implementation:
-  - Relative position bias: computed and USED (V1 bug: unused)
+Swin Transformer blocks (SwinIR-style local spatial branch):
+  - Relative position bias
   - Dynamic padding for arbitrary resolutions
   - Alternating regular / shifted windows
   - Residual Swin Transformer Block (RSTB)
@@ -12,17 +11,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import DropPath, trunc_normal_
 
-from .common import MLP, window_partition, window_reverse, LayerNorm2d, conv3x3
+from .common import MLP, window_partition, window_reverse, pad_to_multiple, unpad, conv3x3
 
 
 # ──────────────────────────────────────────────
 # Window Multi-Head Self-Attention
 # ──────────────────────────────────────────────
 class WindowAttention(nn.Module):
-    """
-    Window-based multi-head self-attention (W-MSA / SW-MSA).
-    Relative position bias is computed once and used in every forward pass.
-    """
+    """Window-based multi-head self-attention (W-MSA / SW-MSA) with relative position bias."""
 
     def __init__(
         self,
@@ -80,7 +76,7 @@ class WindowAttention(nn.Module):
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)  # [B_, num_heads, N, N]
 
-        # Add relative position bias — THIS WAS UNUSED IN V1, NOW PROPERLY APPLIED
+        # Add relative position bias
         rel_pos_bias = self.relative_position_bias_table[
             self.relative_position_index.view(-1)
         ].view(self.window_size ** 2, self.window_size ** 2, -1)
@@ -252,8 +248,6 @@ class RSTB(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, C, H, W]"""
-        from .common import pad_to_multiple, unpad
-
         # Dynamic padding to nearest window-size multiple
         x, (ph, pw) = pad_to_multiple(x, self.window_size)
         _, _, H, W = x.shape

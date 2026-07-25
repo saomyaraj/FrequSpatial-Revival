@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models.layers import DropPath, trunc_normal_
 
 # norms
 class LayerNorm2d(nn.Module):
@@ -42,26 +41,6 @@ class ResBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.res_scale * self.body(x)
-
-
-# channel attention
-class ChannelAttention(nn.Module):
-    """squeeze-and-excitation channel attention"""
-    def __init__(self, channels: int, reduction: int = 16):
-        super().__init__()
-        reduced = max(channels // reduction, 4)
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(
-            conv1x1(channels, reduced, bias=False),
-            nn.GELU(),
-            conv1x1(reduced, channels, bias=False),)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        avg = self.fc(self.avg_pool(x))
-        mx = self.fc(self.max_pool(x))
-        return self.sigmoid(avg + mx) * x
 
 
 # upscale block(pixelshuffle)

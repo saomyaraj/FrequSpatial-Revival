@@ -1,6 +1,6 @@
 """model exports"""
 
 from .generator import FrequSpatialGenerator
-from .discriminator import UNetDiscriminator
+from .spectral import MoSpectralOperator, SpectralBlock, ConvBlock
 
-__all__ = ["FrequSpatialGenerator", "UNetDiscriminator"]
+__all__ = ["FrequSpatialGenerator", "MoSpectralOperator", "SpectralBlock", "ConvBlock"]

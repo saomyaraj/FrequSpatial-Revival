@@ -1,0 +1,13 @@
+# core
+torch>=2.1
+torchvision>=0.16
+timm>=0.9.0
+numpy>=1.24
+scikit-image>=0.21
+Pillow>=9.5
+matplotlib>=3.7
+tqdm>=4.65
+
+# optional
+fvcore>=0.1.5      # FLOPs reporting (utils.misc.count_flops); training works without it
+wandb>=0.16        # experiment logging (set train.use_wandb=True)
